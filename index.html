@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Capybara Onsen Village</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet" />
+  <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/packages/pretendard/dist/web/static/pretendard-dynamic-subset.css" rel="stylesheet" />
+  <style>
+    @font-face {
+      font-family: 'DungGeunMo';
+      src: url('https://fastly.jsdelivr.net/gh/projectnoonnu/noonfonts_six@1.2/DungGeunMo.woff') format('woff');
+      font-weight: normal;
+      font-style: normal;
+    }
+  </style>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <canvas id="scene"></canvas>
+
+  <!-- HUD -->
+  <div id="hud">
+    <!-- Top nav -->
+    <nav id="top-nav">
+      <div id="brand">CAPYBARA ONSEN</div>
+      <div id="nav-links">
+        <a href="#" class="nav-link active" data-page="explore">EXPLORE</a>
+        <a href="#" class="nav-link" data-page="works">WORKS</a>
+        <a href="#" class="nav-link" data-page="about">ABOUT</a>
+      </div>
+    </nav>
+
+    <!-- Left info -->
+    <div id="left-hud">
+      <div class="hud-label">CAPYBARA ONSEN</div>
+      <div class="hud-sub">INTERACTIVE PORTFOLIO</div>
+      <div class="controls-guide">
+        <div class="control-group">
+          <div class="key-cluster">
+            <div class="key-row key-row-center">
+              <span class="key">W</span>
+            </div>
+            <div class="key-row">
+              <span class="key">A</span>
+              <span class="key">S</span>
+              <span class="key">D</span>
+            </div>
+          </div>
+          <span class="key-label">MOVE</span>
+        </div>
+        <div class="control-group">
+          <span class="key wide">SPACE</span>
+          <span class="key-label">JUMP</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Project detail overlay -->
+    <div id="project-detail" class="hidden">
+      <div class="detail-close">&times;</div>
+      <h2 class="detail-title"></h2>
+      <p class="detail-desc"></p>
+      <div class="detail-tags"></div>
+    </div>
+
+    <!-- Proximity indicator -->
+    <div id="proximity-hint" class="hidden">
+      <span class="hint-icon">◉</span>
+      <span class="hint-text">CLICK to view project</span>
+    </div>
+
+    <!-- FPS counter -->
+    <div id="fps-counter">-- FPS</div>
+
+    <!-- Build version marker -->
+    <div id="build-version">BUILD v2</div>
+
+    <!-- Intro removed — start immediately -->
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
