@@ -75,7 +75,25 @@ canvas#scene {
 #nav-links {
   display: flex;
   gap: 12px;
+  align-items: center;
 }
+
+#day-night-toggle {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  color: var(--cream);
+  font-size: 18px;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.3s;
+  margin-left: 4px;
+}
+#day-night-toggle:hover { background: rgba(244,243,221,0.15); }
 
 .nav-link {
   color: var(--cream);
