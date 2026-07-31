@@ -99,15 +99,14 @@ export async function createCharacter(scene, config) {
   const group = new THREE.Group();
   group.add(sprite);
 
-  // Blob shadow — large, visible, dark green-black
+  // Blob shadow — scene-independent so parent scale/rotation never distorts it
   const shadow = new THREE.Mesh(
     new THREE.CircleGeometry(1.2, 16),
     new THREE.MeshBasicMaterial({ color: 0x0A1A0A, transparent: true, opacity: 0.4, depthWrite: false }),
   );
   shadow.rotation.x = -Math.PI / 2;
-  shadow.position.y = 0.03;
-  shadow.renderOrder = 1;
-  group.add(shadow);
+  shadow.renderOrder = 2; // above grass (renderOrder 0)
+  scene.add(shadow); // scene root — immune to sprite flip/rotation
 
   // Head steam (onsen only)
   const STEAM_COUNT = 15;
@@ -220,11 +219,11 @@ export async function createCharacter(scene, config) {
     group.position.x = Math.max(-lim, Math.min(lim, group.position.x));
     group.position.z = Math.max(-lim, Math.min(lim, group.position.z));
 
-    // Shadow scales with jump height
+    // Shadow follows character in world space (detached from group)
     const heightAboveGround = group.position.y - groundY;
     const shadowScale = Math.max(0.3, 1 - heightAboveGround * 0.1);
     shadow.scale.set(shadowScale, shadowScale, 1);
-    shadow.position.y = groundY - group.position.y + 0.02;
+    shadow.position.set(group.position.x, groundY + 0.02, group.position.z);
 
     // ─ d. Facing: front in onsen always, back when moving otherwise ─
     if (inOnsen) {
@@ -241,9 +240,17 @@ export async function createCharacter(scene, config) {
       sprite.material.needsUpdate = true;
     }
 
-    // Bounce animation
+    // Movement bounce + idle breathing
     const baseY = H / 2 + 0.1;
-    sprite.position.y = (speed > 0.5 && isGrounded) ? baseY + Math.abs(Math.sin(time * 12)) * 0.18 : baseY;
+    if (speed > 0.5 && isGrounded) {
+      sprite.position.y = baseY + Math.abs(Math.sin(time * 12)) * 0.18;
+      sprite.scale.y = H;
+    } else {
+      // Idle: gentle breathing (1-2px equiv, slow)
+      const breath = Math.sin(time * 1.8) * 0.02;
+      sprite.position.y = baseY + breath * H;
+      sprite.scale.y = H + Math.sin(time * 1.8 + 0.5) * 0.03; // subtle Y pulse
+    }
 
     // ─ f. Onsen ─
     inOnsen = false;
@@ -305,6 +312,20 @@ export async function createCharacter(scene, config) {
       window.addEventListener('stamp-added', () => showBubble('stamp'));
     }
   }
+
+  // Runtime shadow diagnostics
+  window.__shadowDiag = () => {
+    console.table({
+      exists: !!shadow,
+      inScene: shadow.parent === scene,
+      visible: shadow.visible,
+      y: shadow.position.y.toFixed(3),
+      opacity: shadow.material.opacity,
+      renderOrder: shadow.renderOrder,
+      scaleX: shadow.scale.x.toFixed(2),
+      scaleY: shadow.scale.y.toFixed(2),
+    });
+  };
 
   return {
     group,

@@ -5,6 +5,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { createCharacter } from './character.js';
 import { PROJECTS as PROJECT_DATA } from './projects.js';
 import { addStamp, initStampBoard, hasStamp, getStampCount, getTotalCount } from './stamps.js';
+import { initBuildMarker } from './ui.js';
 
 // ─── PALETTE (from reference) ───
 const P = {
@@ -42,6 +43,7 @@ const PROJECT_INTERACT_DIST = 8, PIXEL_SIZE = 1;
 const POOL_DEFS = [
   { x: 6, z: 0, r: 4.5 }, { x: -8, z: -6, r: 3.5 },
   { x: -4, z: 10, r: 3 }, { x: 14, z: -20, r: 3 },
+  { x: -2, z: -24, r: 3 }, { x: 2, z: 24, r: 3.5 },
 ];
 const POOL_DEPTH = 0.7;
 const WATER_Y = -0.15;
@@ -60,16 +62,18 @@ let projectSigns = [], steamParticles = [], waterMeshes = [], lanternMeshes = []
 let yuzuGroups = [], poolData = [];
 let obstacles = []; // {x, z, r} for collision
 let godRayMeshes = [];
+let swayMeshes = []; // bushes/grass for wind sway
+let sparkleParticles = []; // water surface sparkle
 let debugColliders = null, debugVisible = false;
 
 // ─── DAY/NIGHT ───
 let isNoon = true, dayNightT = 1; // t: 0=night, 1=noon
 const DAY = {
-  bg: new THREE.Color(0x0A0D0B), fog: new THREE.Color(0x2A4050),
+  bg: new THREE.Color(0x0A0D0B), fog: new THREE.Color(0x3A5A70),
   ambientI: 2.2, sunI: 1.2, skyTop: [0x2A,0x48,0x58], skyBot: [0x5A,0x8A,0x98],
 };
 const NOON = {
-  bg: new THREE.Color(0x2A3A28), fog: new THREE.Color(0x88BBAA),
+  bg: new THREE.Color(0x2A3A28), fog: new THREE.Color(0x8AC8E0),
   ambientI: 4.0, sunI: 2.5, skyTop: [0x55,0x99,0xDD], skyBot: [0xAA,0xDD,0xF0],
 };
 let ambientLight, sunLight, skyMesh;
@@ -79,7 +83,7 @@ function init() {
   clock = new THREE.Clock();
   scene = new THREE.Scene();
   scene.background = new THREE.Color(P.darkest);
-  scene.fog = new THREE.Fog(0x2A4050, 30, 75); // Lighter teal fog
+  scene.fog = new THREE.Fog(0x6AAAC8, 45, 100); // Sky-blue tint, pushed far
 
   camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 200);
   renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('scene'), antialias: false, powerPreference: 'high-performance' });
@@ -100,7 +104,7 @@ function init() {
     character = await createCharacter(scene, {
       obstacles, poolData, getGroundHeight, WATER_Y, creamColor: P.cream, camera,
     });
-    setupEvents(); setupDayNight(); initStampBoard(); animate();
+    setupEvents(); setupDayNight(); initStampBoard(); initBuildMarker(); animate();
     // Debug
     window.__toggleRays = (v) => godRayMeshes.forEach(r => r.visible = v);
     window.__teleport = (x, z) => { if (character) character.group.position.set(x, 0, z); };
@@ -161,14 +165,23 @@ function createSky() {
   scene.add(skyMesh);
 }
 
+// ─── POOL DEPRESSION HELPER (shared by ground mesh & height query) ───
+function poolDepth(dist, r) {
+  const flatR = Math.max(0, r - 0.5);   // flat bottom radius
+  const edgeR = r + 0.8;                // ramp ends here
+  if (dist >= edgeR) return 0;
+  if (dist <= flatR) return -POOL_DEPTH;
+  const t = (dist - flatR) / (edgeR - flatR);
+  return -POOL_DEPTH * (1 - t * t * t);  // cubic ease-out → steep sides, gentle finish
+}
+
 // ─── GROUND HEIGHT HELPER ───
 function getGroundHeight(wx, wz) {
   let h = Math.sin(wx * 0.08) * Math.cos(wz * 0.08) * 0.4 + Math.sin(wx * 0.2 + wz * 0.15) * 0.2;
   for (const p of POOL_DEFS) {
     const dist = Math.hypot(wx - p.x, wz - p.z);
-    if (dist < p.r + 0.5) {
-      const t = Math.max(0, 1 - dist / (p.r + 0.3));
-      h = Math.min(h, -POOL_DEPTH * Math.pow(t, 0.5));
+    if (dist < p.r + 1.0) {
+      h = Math.min(h, poolDepth(dist, p.r));
     }
   }
   return h;
@@ -182,12 +195,11 @@ function createGround() {
     const x = pos.getX(i), y = pos.getY(i);
     // Base terrain noise
     let z = Math.sin(x * 0.08) * Math.cos(y * 0.08) * 0.4 + Math.sin(x * 0.2 + y * 0.15) * 0.2;
-    // Depress pool areas
+    // Depress pool areas (bathtub shape: flat bottom + steep sides)
     for (const p of POOL_DEFS) {
       const dist = Math.hypot(x - p.x, y - p.z);
-      if (dist < p.r + 0.5) {
-        const t = Math.max(0, 1 - dist / (p.r + 0.3));
-        z = Math.min(z, -POOL_DEPTH * Math.pow(t, 0.5));
+      if (dist < p.r + 1.0) {
+        z = Math.min(z, poolDepth(dist, p.r));
       }
     }
     pos.setZ(i, z);
@@ -266,7 +278,9 @@ function createVegetation() {
       const blob = new THREE.Mesh(bushGeo, new THREE.MeshToonMaterial({ color: col, gradientMap: toonGrad }));
       blob.scale.set(cs, cs * 0.7, cs);
       blob.position.set(x + (Math.random()-0.5)*baseS*0.6, cs*0.3, z + (Math.random()-0.5)*baseS*0.6);
+      blob.userData.swayPhase = Math.random() * Math.PI * 2;
       scene.add(blob);
+      swayMeshes.push(blob);
     }
   }
 
@@ -282,11 +296,13 @@ function createVegetation() {
     }));
     patch.scale.set(s * 1.2, s * 0.3, s * 1.2); // very flat
     patch.position.set(x, s * 0.05, z);
+    patch.userData.swayPhase = Math.random() * Math.PI * 2;
     scene.add(patch);
+    swayMeshes.push(patch);
   }
 
-  // 3. Boulders — warm gray, with collision
-  for (let i = 0; i < 15; i++) {
+  // 3. Boulders — warm gray, with collision (reduced for cleaner lawn)
+  for (let i = 0; i < 5; i++) {
     const r = 5 + Math.random() * 30;
     const a = Math.random() * Math.PI * 2;
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
@@ -356,8 +372,8 @@ function createGodRays() {
 function createUndergrowth() {
   const rockGeo = new THREE.DodecahedronGeometry(1, 0);
 
-  // Mossy rocks scattered
-  for (let i = 0; i < 25; i++) {
+  // Mossy rocks scattered (reduced — cleaner lawn)
+  for (let i = 0; i < 8; i++) {
     const r = 3 + Math.random() * 40;
     const a = Math.random() * Math.PI * 2;
     const s = 0.3 + Math.random() * 1;
@@ -367,19 +383,20 @@ function createUndergrowth() {
     }));
     rock.scale.setScalar(s);
     const rx = Math.cos(a) * r, rz = Math.sin(a) * r;
-    // Skip if inside onsen area
-    let inPool = false;
-    for (const pool of POOL_DEFS) { if (Math.hypot(rx - pool.x, rz - pool.z) < pool.r + 1) { inPool = true; break; } }
-    if (inPool) continue;
+    // Skip if inside onsen area or overlapping existing obstacles (incl. stone lanterns)
+    let skip = false;
+    for (const pool of POOL_DEFS) { if (Math.hypot(rx - pool.x, rz - pool.z) < pool.r + 1) { skip = true; break; } }
+    if (!skip) { for (const obs of obstacles) { if (Math.hypot(rx - obs.x, rz - obs.z) < s * 0.6 + obs.r + 0.3) { skip = true; break; } } }
+    if (skip) continue;
     rock.position.set(rx, s * 0.25, rz);
     rock.rotation.set(Math.random(), Math.random() * Math.PI, Math.random() * 0.5);
     scene.add(rock);
     if (s > 0.7) obstacles.push({ x: rx, z: rz, r: s * 0.6 }); // big rock collision
   }
 
-  // Bush clusters (small sphere groups on ground)
+  // Bush clusters (small sphere groups on ground — reduced)
   const bushGeo = new THREE.SphereGeometry(1, 5, 4);
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 12; i++) {
     const r = 2 + Math.random() * 45;
     const a = Math.random() * Math.PI * 2;
     const s = 0.4 + Math.random() * 0.8;
@@ -389,10 +406,11 @@ function createUndergrowth() {
     }));
     bush.scale.set(s, s * 0.6, s);
     const bx = Math.cos(a) * r, bz = Math.sin(a) * r;
-    // Skip if inside onsen area
-    let inPool = false;
-    for (const pool of POOL_DEFS) { if (Math.hypot(bx - pool.x, bz - pool.z) < pool.r + 1) { inPool = true; break; } }
-    if (inPool) continue;
+    // Skip if inside onsen area or overlapping obstacles
+    let skip2 = false;
+    for (const pool of POOL_DEFS) { if (Math.hypot(bx - pool.x, bz - pool.z) < pool.r + 1) { skip2 = true; break; } }
+    if (!skip2) { for (const obs of obstacles) { if (Math.hypot(bx - obs.x, bz - obs.z) < s * 0.4 + obs.r + 0.2) { skip2 = true; break; } } }
+    if (skip2) continue;
     bush.position.set(bx, s * 0.2, bz);
     scene.add(bush);
   }
@@ -405,12 +423,13 @@ function createOnsenPools() {
   POOL_DEFS.forEach(p => {
     poolData.push(p);
 
-    // Pool floor (dark bottom visible through water)
+    // Pool floor — sized to fully cover rock-ring interior + ripple margin
+    const floorR = p.r + 0.7;
     const floor = new THREE.Mesh(
-      new THREE.CircleGeometry(p.r, 24),
+      new THREE.CircleGeometry(floorR, 48),
       new THREE.MeshBasicMaterial({ color: P.dark }),
     );
-    floor.position.set(p.x, WATER_Y - 0.15, p.z); // below water surface
+    floor.position.set(p.x, WATER_Y - 0.05, p.z); // just below water, above depressed ground
     floor.rotation.x = -Math.PI / 2;
     scene.add(floor);
 
@@ -429,9 +448,10 @@ function createOnsenPools() {
       scene.add(rock);
     }
 
-    // Water — light sky blue, sits inside the depression
+    // Water — light sky blue, covers full rock-ring interior
+    const waterR = p.r + 0.3;
     const water = new THREE.Mesh(
-      new THREE.CircleGeometry(p.r - 0.2, 24),
+      new THREE.CircleGeometry(waterR, 48),
       new THREE.MeshBasicMaterial({
         color: 0x6BD4F0, transparent: true, opacity: 0.85,
       }),
@@ -442,12 +462,34 @@ function createOnsenPools() {
     scene.add(water);
     waterMeshes.push(water);
 
+    // Water sparkle — bright specular-like dots drifting on surface
+    {
+      const sparkCount = 20;
+      const sparkGeo = new THREE.BufferGeometry();
+      const sparkPos = new Float32Array(sparkCount * 3);
+      for (let si = 0; si < sparkCount; si++) {
+        const sa = Math.random() * Math.PI * 2, sd = Math.random() * (p.r - 0.5);
+        sparkPos[si * 3]     = Math.cos(sa) * sd;
+        sparkPos[si * 3 + 1] = 0.03;
+        sparkPos[si * 3 + 2] = Math.sin(sa) * sd;
+      }
+      sparkGeo.setAttribute('position', new THREE.BufferAttribute(sparkPos, 3));
+      const sparkMat = new THREE.PointsMaterial({
+        color: 0xFFFFFF, size: 0.08, transparent: true, opacity: 0.5,
+        depthWrite: false, sizeAttenuation: true,
+      });
+      const sparkles = new THREE.Points(sparkGeo, sparkMat);
+      sparkles.position.set(p.x, WATER_Y + 0.02, p.z);
+      scene.add(sparkles);
+      sparkleParticles.push({ mesh: sparkles, pool: p, count: sparkCount });
+    }
+
     // (stick lanterns removed — stone lanterns in createOnsenProps)
 
     // Yuzu — detailed: yellow-orange sphere + green leaf on top
     const yuzuGroup = new THREE.Group();
-    const yuzuBodyGeo = new THREE.SphereGeometry(0.35, 8, 6);
-    const yuzuLeafGeo = new THREE.SphereGeometry(0.08, 4, 3);
+    const yuzuBodyGeo = new THREE.SphereGeometry(0.22, 8, 6);
+    const yuzuLeafGeo = new THREE.SphereGeometry(0.05, 4, 3);
     for (let i = 0; i < 3 + Math.floor(Math.random() * 3); i++) {
       const a = Math.random() * Math.PI * 2, d = 0.5 + Math.random() * (p.r - 1.5);
       const sVar = 0.85 + Math.random() * 0.3;
@@ -477,6 +519,17 @@ function createOnsenPools() {
     scene.add(yuzuGroup);
     yuzuGroups.push(yuzuGroup);
   });
+
+  // ── Validation: every pool's water must cover its rock-ring interior ──
+  POOL_DEFS.forEach((p, i) => {
+    const waterR = p.r + 0.3;
+    const floorR = p.r + 0.7;
+    const rockInnerR = p.r - 0.75;  // conservative inner edge of rocks
+    const ok = waterR >= rockInnerR && floorR > waterR;
+    console.log(
+      `[Pool ${i}] r=${p.r}  waterR=${waterR.toFixed(2)}  floorR=${floorR.toFixed(2)}  rockInner≈${rockInnerR.toFixed(2)}  ${ok ? '✓ PASS' : '✗ FAIL'}`,
+    );
+  });
 }
 
 // ─── ONSEN VILLAGE PROPS ───
@@ -491,45 +544,153 @@ function createOnsenProps() {
       placedProps.push({ x, z, r });
       return true;
     }
-    // === Stone lanterns (1-2 per pool, replace stick lanterns) ===
+    // === Traditional stone lanterns (6-part: 받침–기둥–중대석–화사석–지붕–구슬) ===
     for (let i = 0; i < 1 + (pi % 2); i++) {
-      const a = (pi * 1.7 + i * 2.5) % (Math.PI * 2);
+      let a = (pi * 1.7 + i * 2.5) % (Math.PI * 2);
       const d = p.r + 1.8;
-      const lx = p.x + Math.cos(a) * d, lz = p.z + Math.sin(a) * d;
+      let lx, lz, placed = false;
+      // Try up to 6 angles to guarantee placement
+      for (let attempt = 0; attempt < 6 && !placed; attempt++) {
+        lx = p.x + Math.cos(a) * d; lz = p.z + Math.sin(a) * d;
+        if (tryPlace(lx, lz, 0.55)) { placed = true; break; }
+        a += Math.PI / 3; // rotate 60°
+      }
+      if (!placed) continue;
 
       const g = new THREE.Group();
-      // Base (square-ish)
-      const base = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.25, 0.6),
-        new THREE.MeshToonMaterial({ color: 0x5a5a52, gradientMap: toonGrad }));
-      base.position.y = 0.125; g.add(base);
-      // Pillar
-      const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, 1.2, 6),
-        new THREE.MeshToonMaterial({ color: 0x6a6a62, gradientMap: toonGrad }));
-      pillar.position.y = 0.85; g.add(pillar);
-      // Light chamber (wider box with warm color)
-      const chamber = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.4, 0.5),
-        new THREE.MeshBasicMaterial({ color: P.warm, transparent: true, opacity: 0.85 }));
-      chamber.position.y = 1.65; g.add(chamber);
-      lanternMeshes.push(chamber);
-      // Roof
-      const roof = new THREE.Mesh(new THREE.SphereGeometry(0.4, 6, 4, 0, Math.PI * 2, 0, Math.PI * 0.5),
-        new THREE.MeshToonMaterial({ color: 0x4a4a42, gradientMap: toonGrad }));
-      roof.position.y = 1.85; g.add(roof);
-      // Warm point light
-      const light = new THREE.PointLight(0xC67652, 0.8, 7, 2);
-      light.position.y = 1.65; g.add(light);
+      // Height budget: total ~4.2  (1.5× capybara 2.8)
+      // 받침 15%=0.63, 기둥 30%=1.26, 중대석 8%=0.34, 화사석 25%=1.05, 지붕 17%=0.71, 구슬 5%=0.21
+      const stoneColors = [0x7A7168, 0x6B6560, 0x8A8078];
+      const stoneC = (idx) => stoneColors[idx % stoneColors.length];
+      let y = 0;
 
-      if (!tryPlace(lx, lz, 0.4)) continue;
+      // 1. 받침돌 — low, wide natural stone
+      const baseH = 0.63;
+      const base = new THREE.Mesh(
+        new THREE.DodecahedronGeometry(0.55, 0),
+        new THREE.MeshToonMaterial({ color: stoneC(0), gradientMap: toonGrad }),
+      );
+      base.scale.set(1.0, baseH / 0.55 * 0.5, 1.0); // flatten
+      base.position.y = baseH * 0.45;
+      g.add(base);
+      y = baseH;
+
+      // 2. 기둥부 — 4 splayed legs
+      const pillarH = 1.26;
+      const legCount = 4;
+      const legR = 0.08;
+      for (let li = 0; li < legCount; li++) {
+        const la = (li / legCount) * Math.PI * 2;
+        const leg = new THREE.Mesh(
+          new THREE.CylinderGeometry(legR, legR * 1.3, pillarH, 5),
+          new THREE.MeshToonMaterial({ color: stoneC(1), gradientMap: toonGrad }),
+        );
+        // Splay outward: bottom wider, top narrower
+        const bottomOff = 0.22, topOff = 0.10;
+        const bx = Math.cos(la) * bottomOff, bz = Math.sin(la) * bottomOff;
+        const tx = Math.cos(la) * topOff, tz = Math.sin(la) * topOff;
+        leg.position.set((bx + tx) / 2, y + pillarH / 2, (bz + tz) / 2);
+        // Tilt each leg inward
+        const tilt = Math.atan2(bottomOff - topOff, pillarH);
+        leg.rotation.x = Math.sin(la) * tilt;
+        leg.rotation.z = -Math.cos(la) * tilt;
+        g.add(leg);
+      }
+      y += pillarH;
+
+      // 3. 중대석 — trapezoid platform (wider at top)
+      const midH = 0.34;
+      const mid = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.42, 0.30, midH, 6),
+        new THREE.MeshToonMaterial({ color: stoneC(2), gradientMap: toonGrad }),
+      );
+      mid.position.y = y + midH / 2;
+      g.add(mid);
+      y += midH;
+
+      // 4. 화사석 — hexagonal fire chamber with glowing window slits
+      const chamberH = 1.05;
+      const chamberR = 0.35;
+      const chamberSides = 6;
+      // Outer stone shell
+      const chamberShell = new THREE.Mesh(
+        new THREE.CylinderGeometry(chamberR, chamberR, chamberH, chamberSides),
+        new THREE.MeshToonMaterial({ color: stoneC(0), gradientMap: toonGrad }),
+      );
+      chamberShell.position.y = y + chamberH / 2;
+      g.add(chamberShell);
+      // Glowing window slits on each face — wide enough to read at game-camera distance
+      const windowGroup = new THREE.Group();
+      windowGroup.position.y = y + chamberH / 2;
+      const faceW = 2 * chamberR * Math.sin(Math.PI / chamberSides); // face width
+      const winW = faceW * 0.40, winH = chamberH * 0.60;
+      const winGeo = new THREE.PlaneGeometry(winW, winH);
+      for (let wi = 0; wi < chamberSides; wi++) {
+        const wa = (wi / chamberSides) * Math.PI * 2 + Math.PI / chamberSides;
+        const winMat = new THREE.MeshBasicMaterial({
+          color: 0xC67652, side: THREE.DoubleSide,
+        });
+        const win = new THREE.Mesh(winGeo, winMat);
+        const apothem = chamberR * Math.cos(Math.PI / chamberSides) + 0.01;
+        win.position.set(Math.cos(wa) * apothem, 0, Math.sin(wa) * apothem);
+        win.rotation.y = -wa + Math.PI / 2;
+        windowGroup.add(win);
+      }
+      g.add(windowGroup);
+      // Push chamber group ref for day/night control (windows + shell)
+      lanternMeshes.push({ shell: chamberShell, windows: windowGroup, isLanternV2: true });
+      y += chamberH;
+
+      // 5. 지붕 — wide hexagonal roof with upturned eaves
+      const roofH = 0.71;
+      const roofR = 0.62; // wider than chamber for prominent silhouette
+      // Main roof cone
+      const roofGeo = new THREE.CylinderGeometry(0.08, roofR, roofH * 0.7, 6);
+      const roof = new THREE.Mesh(roofGeo,
+        new THREE.MeshToonMaterial({ color: 0x5A5550, gradientMap: toonGrad }));
+      roof.position.y = y + roofH * 0.35;
+      g.add(roof);
+      // Eave lip — flared ring at roof bottom for upturn effect
+      const eave = new THREE.Mesh(
+        new THREE.TorusGeometry(roofR - 0.05, 0.05, 4, 6),
+        new THREE.MeshToonMaterial({ color: 0x5A5550, gradientMap: toonGrad }),
+      );
+      eave.rotation.x = -Math.PI / 2;
+      eave.position.y = y + 0.05;
+      g.add(eave);
+      y += roofH;
+
+      // 6. 꼭대기 구슬
+      const jewelR = 0.09;
+      const jewel = new THREE.Mesh(
+        new THREE.SphereGeometry(jewelR, 6, 4),
+        new THREE.MeshToonMaterial({ color: stoneC(2), gradientMap: toonGrad }),
+      );
+      jewel.position.y = y + jewelR;
+      g.add(jewel);
+
+      // Point light at fire chamber center
+      const light = new THREE.PointLight(0xC67652, 0.8, 7, 2);
+      light.position.y = y - roofH - chamberH / 2; // center of chamber
+      g.add(light);
+
       g.position.set(lx, 0, lz);
+      g.scale.setScalar(0.65); // scale down to ~1.0x capybara height visually
       scene.add(g);
-      obstacles.push({ x: lx, z: lz, r: 0.4 });
+      obstacles.push({ x: lx, z: lz, r: 0.40 });
     }
 
     // === Wooden bath tubs (2 per pool) ===
     for (let i = 0; i < 2; i++) {
-      const a = (pi * 2.1 + i * 3.0 + 1.0) % (Math.PI * 2);
+      let a = (pi * 2.1 + i * 3.0 + 1.0) % (Math.PI * 2);
       const d = p.r + 2.2;
-      const tx = p.x + Math.cos(a) * d, tz = p.z + Math.sin(a) * d;
+      let tx, tz, tubPlaced = false;
+      for (let att = 0; att < 8 && !tubPlaced; att++) {
+        tx = p.x + Math.cos(a) * d; tz = p.z + Math.sin(a) * d;
+        if (tryPlace(tx, tz, 0.45)) { tubPlaced = true; break; }
+        a += Math.PI / 4;
+      }
+      if (!tubPlaced) continue;
 
       const tub = new THREE.Group();
       // Tub body (cylinder, open top)
@@ -545,7 +706,6 @@ function createOnsenProps() {
         new THREE.MeshToonMaterial({ color: 0x8B7754, gradientMap: toonGrad }));
       rim.rotation.x = -Math.PI / 2; rim.position.y = 0.5; tub.add(rim);
 
-      if (!tryPlace(tx, tz, 0.45)) continue;
       tub.position.set(tx, 0, tz);
       // Water inside upright tub
       if (i === 0) {
@@ -599,33 +759,33 @@ function createOnsenProps() {
       const dd = 0.8 + Math.random() * (p.r - 2.0);
       const duck = new THREE.Group();
       // Body — round, classic rubber duck
-      const dBody = new THREE.Mesh(new THREE.SphereGeometry(0.4, 8, 6),
+      const dBody = new THREE.Mesh(new THREE.SphereGeometry(0.28, 8, 6),
         new THREE.MeshToonMaterial({ color: 0xF0D040, gradientMap: toonGrad }));
       dBody.scale.set(1, 0.75, 1.3);
       duck.add(dBody);
       // Tail bump (raised back)
-      const tail = new THREE.Mesh(new THREE.SphereGeometry(0.15, 5, 4),
+      const tail = new THREE.Mesh(new THREE.SphereGeometry(0.10, 5, 4),
         new THREE.MeshToonMaterial({ color: 0xF0D040, gradientMap: toonGrad }));
-      tail.position.set(0, 0.15, -0.35);
+      tail.position.set(0, 0.10, -0.25);
       duck.add(tail);
       // Head — round
-      const dHead = new THREE.Mesh(new THREE.SphereGeometry(0.22, 7, 5),
+      const dHead = new THREE.Mesh(new THREE.SphereGeometry(0.15, 7, 5),
         new THREE.MeshToonMaterial({ color: 0xF0D040, gradientMap: toonGrad }));
-      dHead.position.set(0, 0.28, 0.3);
+      dHead.position.set(0, 0.20, 0.22);
       duck.add(dHead);
       // Beak — flat orange wedge
-      const beak = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.06, 0.12),
+      const beak = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.04, 0.08),
         new THREE.MeshToonMaterial({ color: 0xE07020, gradientMap: toonGrad }));
-      beak.position.set(0, 0.24, 0.52);
+      beak.position.set(0, 0.17, 0.37);
       duck.add(beak);
       // Eyes — tiny black dots
-      const eyeGeo = new THREE.SphereGeometry(0.03, 4, 3);
+      const eyeGeo = new THREE.SphereGeometry(0.02, 4, 3);
       const eyeMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
       const eyeL = new THREE.Mesh(eyeGeo, eyeMat);
-      eyeL.position.set(-0.12, 0.34, 0.42);
+      eyeL.position.set(-0.08, 0.24, 0.30);
       duck.add(eyeL);
       const eyeR = new THREE.Mesh(eyeGeo, eyeMat);
-      eyeR.position.set(0.12, 0.34, 0.42);
+      eyeR.position.set(0.08, 0.24, 0.30);
       duck.add(eyeR);
 
       duck.position.set(
@@ -641,74 +801,73 @@ function createOnsenProps() {
   });
 }
 
-// ─── PROJECT SIGNS (onsen gates) ───
+// ─── PROJECT SIGNS (low wooden nameplates, 1 per pool) ───
+const _usedPools = new Set(); // track pool assignment to avoid duplicates
 function createProjectSign(project, index) {
   const group = new THREE.Group();
   const [px, , pz] = project.position;
-  const gateH = 3.5, gateW = 2.8;
 
-  // Two wooden pillars
-  const pillarGeo = new THREE.CylinderGeometry(0.12, 0.15, gateH, 6);
-  const pillarMat = new THREE.MeshToonMaterial({ color: 0x5A4030, gradientMap: toonGrad });
-  const pillarL = new THREE.Mesh(pillarGeo, pillarMat);
-  pillarL.position.set(-gateW / 2, gateH / 2, 0);
-  group.add(pillarL);
-  const pillarR = new THREE.Mesh(pillarGeo, pillarMat);
-  pillarR.position.set(gateW / 2, gateH / 2, 0);
-  group.add(pillarR);
+  // Find nearest UNASSIGNED pool
+  let nearPool = null, nearDist = Infinity;
+  for (const pool of POOL_DEFS) {
+    const key = `${pool.x},${pool.z}`;
+    if (_usedPools.has(key)) continue;
+    const d = Math.hypot(px - pool.x, pz - pool.z);
+    if (d < nearDist) { nearDist = d; nearPool = pool; }
+  }
+  if (!nearPool) { console.warn(`[SIGN] No pool for project ${project.name}`); return; }
+  _usedPools.add(`${nearPool.x},${nearPool.z}`);
 
-  // Horizontal beam (crossbar)
-  const beamGeo = new THREE.BoxGeometry(gateW + 0.5, 0.2, 0.2);
-  const beam = new THREE.Mesh(beamGeo, pillarMat);
-  beam.position.y = gateH - 0.3;
-  group.add(beam);
+  // Low nameplate: single thick post + wide board at waist height
+  const postH = 2.2; // waist-height sign post
+  const boardW = 2.0, boardH = 0.8;
 
-  // Hanging wooden sign (nameplate)
-  const boardW = 2.2, boardH = 0.9;
-  const boardGeo = new THREE.BoxGeometry(boardW, boardH, 0.08);
-  const board = new THREE.Mesh(boardGeo, new THREE.MeshToonMaterial({ color: 0x6B5744, gradientMap: toonGrad }));
-  board.position.y = gateH - 1.2;
+  // Post
+  const post = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.1, 0.12, postH, 6),
+    new THREE.MeshToonMaterial({ color: 0x5A4030, gradientMap: toonGrad }),
+  );
+  post.position.y = postH / 2;
+  group.add(post);
+
+  // Board
+  const board = new THREE.Mesh(
+    new THREE.BoxGeometry(boardW, boardH, 0.1),
+    new THREE.MeshToonMaterial({ color: 0x6B5744, gradientMap: toonGrad }),
+  );
+  board.position.y = postH - boardH / 2 - 0.1;
   group.add(board);
 
-  // Text on board
+  // Text — big, fills the board
   const canvas = document.createElement('canvas'); canvas.width = 256; canvas.height = 128;
   const ctx = canvas.getContext('2d'); ctx.imageSmoothingEnabled = false;
   ctx.fillStyle = '#6B5744'; ctx.fillRect(0, 0, 256, 128);
   ctx.fillStyle = 'rgba(90,70,50,0.3)';
   for (let gy = 0; gy < 128; gy += 6) ctx.fillRect(0, gy, 256, 1);
-  ctx.font = '72px "DungGeunMo", "Press Start 2P", monospace';
+  ctx.font = '64px "DungGeunMo", "Press Start 2P", monospace';
   ctx.fillStyle = '#F0EFE2'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(project.name, 128, 64);
   const tex = new THREE.CanvasTexture(canvas);
   tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter; tex.generateMipmaps = false;
   const tp = new THREE.Mesh(new THREE.PlaneGeometry(boardW - 0.1, boardH - 0.1), new THREE.MeshBasicMaterial({ map: tex }));
-  tp.position.set(0, gateH - 1.2, 0.05); group.add(tp);
-  const tb = tp.clone(); tb.rotation.y = Math.PI; tb.position.z = -0.05; group.add(tb);
+  tp.position.set(0, postH - boardH / 2 - 0.1, 0.06); group.add(tp);
+  const tb = tp.clone(); tb.rotation.y = Math.PI; tb.position.z = -0.06; group.add(tb);
 
-  // Subtle warm accent light
-  const signAccent = new THREE.PointLight(0xD4C8A0, 0.4, 5, 2);
-  signAccent.position.y = gateH - 1;
-  group.add(signAccent);
+  // Warm accent
+  const accent = new THREE.PointLight(0xD4C8A0, 0.3, 4, 2);
+  accent.position.y = postH - 0.5;
+  group.add(accent);
 
-  // Move gate closer to nearest pool
-  let nearPool = POOL_DEFS[0];
-  let nearDist = Infinity;
-  for (const pool of POOL_DEFS) {
-    const d = Math.hypot(px - pool.x, pz - pool.z);
-    if (d < nearDist) { nearDist = d; nearPool = pool; }
-  }
+  // Position at pool rim
   const dirX = px - nearPool.x, dirZ = pz - nearPool.z;
-  const dirLen = Math.sqrt(dirX*dirX + dirZ*dirZ) || 1;
-  const gx = nearPool.x + (dirX/dirLen) * (nearPool.r + 1.5);
-  const gz = nearPool.z + (dirZ/dirLen) * (nearPool.r + 1.5);
+  const dirLen = Math.sqrt(dirX * dirX + dirZ * dirZ) || 1;
+  const gx = nearPool.x + (dirX / dirLen) * (nearPool.r + 1.2);
+  const gz = nearPool.z + (dirZ / dirLen) * (nearPool.r + 1.2);
   group.position.set(gx, 0, gz);
-  group.lookAt(0, 0, 0); group.rotation.y += Math.PI;
+  group.lookAt(nearPool.x, 0, nearPool.z);
   group.userData = { project };
   scene.add(group); projectSigns.push(group);
-  // Colliders for both pillars
-  const sinA = Math.sin(group.rotation.y), cosA = Math.cos(group.rotation.y);
-  obstacles.push({ x: gx - sinA * gateW/2, z: gz - cosA * gateW/2, r: 0.3 });
-  obstacles.push({ x: gx + sinA * gateW/2, z: gz + cosA * gateW/2, r: 0.3 });
+  obstacles.push({ x: gx, z: gz, r: 0.3 });
 }
 
 // ─── STEAM ───
@@ -727,7 +886,7 @@ function createSteamSystem() {
     }
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     const particles = new THREE.Points(geo, new THREE.PointsMaterial({
-      color: 0xF0E8D8, size: 0.15, sizeAttenuation: true, transparent: true, opacity: 0.12, depthWrite: false,
+      color: 0xF0E8D8, size: 0.18, sizeAttenuation: true, transparent: true, opacity: 0.22, depthWrite: false,
     }));
     particles.userData = { velocities: vels, center: [p.x, p.z], count, radius: p.r };
     scene.add(particles); steamParticles.push(particles);
@@ -741,6 +900,22 @@ function setupEvents() {
     const mapped = codeMap[e.code];
     if (mapped) { keys[mapped] = true; e.preventDefault(); }
   });
+  // Mobile D-pad touch controls
+  document.querySelectorAll('.dpad-btn').forEach(btn => {
+    const dir = btn.dataset.dir;
+    btn.addEventListener('touchstart', e => { e.preventDefault(); keys[dir] = true; }, { passive: false });
+    btn.addEventListener('touchend', e => { keys[dir] = false; });
+  });
+  const jumpBtn = document.getElementById('mobile-jump');
+  if (jumpBtn) {
+    jumpBtn.addEventListener('touchstart', e => { e.preventDefault(); keys['space'] = true; }, { passive: false });
+    jumpBtn.addEventListener('touchend', () => { keys['space'] = false; });
+  }
+  // Tap on screen near gate = open project
+  document.getElementById('scene').addEventListener('touchstart', e => {
+    if (nearestProject && !detailOpen) showProjectDetail(nearestProject);
+  });
+
   window.addEventListener('keyup', e => {
     const mapped = codeMap[e.code];
     if (mapped) { keys[mapped] = false; }
@@ -762,8 +937,30 @@ function setupEvents() {
     if (e.code === 'KeyC') toggleDebugColliders();
     if ((e.code === 'Enter' || e.code === 'KeyE') && nearestProject && !detailOpen) showProjectDetail(nearestProject);
   });
+  // Nav tabs: WORKS / ABOUT overlays
   document.querySelectorAll('.nav-link').forEach(link => {
-    link.addEventListener('click', e => { e.preventDefault(); document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active')); link.classList.add('active'); });
+    link.addEventListener('click', e => {
+      e.preventDefault();
+      const page = link.dataset.page;
+      document.querySelectorAll('.page-overlay').forEach(o => o.classList.add('hidden'));
+      if (page === 'works') {
+        const wl = document.getElementById('works-list');
+        wl.innerHTML = PROJECTS.map(p => `<div class="works-card"><h3>${p.name}</h3><p>${p.desc}</p><div class="detail-tags">${p.tags.map(t=>`<span class="detail-tag">${t}</span>`).join('')}</div>${p.link && p.link!=='#' ? `<a href="${p.link}" target="_blank" class="detail-link">Visit →</a>` : ''}</div>`).join('');
+        document.getElementById('works-overlay').classList.remove('hidden');
+      } else if (page === 'about') {
+        document.getElementById('about-overlay').classList.remove('hidden');
+      } else {
+        // "explore" = close overlays
+      }
+      document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+      link.classList.add('active');
+    });
+  });
+  document.querySelectorAll('.overlay-close').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.page-overlay').forEach(o => o.classList.add('hidden'));
+      document.querySelector('.nav-link[data-page="explore"]').classList.add('active');
+    });
   });
 }
 
@@ -775,9 +972,51 @@ function showProjectDetail(project) {
   el.querySelector('.detail-title').textContent = project.name;
   el.querySelector('.detail-desc').textContent = project.desc;
   el.querySelector('.detail-tags').innerHTML = project.tags.map(t => `<span class="detail-tag">${t}</span>`).join('');
+  // Visit link
+  let linkEl = el.querySelector('.detail-link');
+  if (!linkEl) { linkEl = document.createElement('a'); linkEl.className = 'detail-link'; el.appendChild(linkEl); }
+  linkEl.href = project.link || '#';
+  linkEl.target = '_blank';
+  linkEl.rel = 'noopener';
+  linkEl.textContent = 'Visit →';
+  linkEl.style.display = (project.link && project.link !== '#') ? 'inline-block' : 'none';
   el.classList.remove('hidden');
 }
 function closeProjectDetail() { detailOpen = false; document.getElementById('project-detail').classList.add('hidden'); }
+
+// ─── Pixel-art sun/moon icons (no system emoji) ───
+function drawSunIcon(size) {
+  const c = document.createElement('canvas'); c.width = size; c.height = size;
+  const ctx = c.getContext('2d'); ctx.imageSmoothingEnabled = false;
+  const s = size / 16;
+  ctx.fillStyle = '#F0D040';
+  ctx.beginPath(); ctx.arc(8*s, 8*s, 4*s, 0, Math.PI*2); ctx.fill();
+  // Rays (4 cardinal + 4 diagonal)
+  ctx.fillRect(7*s, 1*s, 2*s, 2*s); ctx.fillRect(7*s, 13*s, 2*s, 2*s);
+  ctx.fillRect(1*s, 7*s, 2*s, 2*s); ctx.fillRect(13*s, 7*s, 2*s, 2*s);
+  ctx.fillRect(3*s, 3*s, 1*s, 1*s); ctx.fillRect(12*s, 3*s, 1*s, 1*s);
+  ctx.fillRect(3*s, 12*s, 1*s, 1*s); ctx.fillRect(12*s, 12*s, 1*s, 1*s);
+  return c;
+}
+function drawMoonIcon(size) {
+  const c = document.createElement('canvas'); c.width = size; c.height = size;
+  const ctx = c.getContext('2d'); ctx.imageSmoothingEnabled = false;
+  const s = size / 16;
+  ctx.fillStyle = '#D5D3B8';
+  ctx.beginPath(); ctx.arc(8*s, 8*s, 5*s, 0, Math.PI*2); ctx.fill();
+  // Cut out for crescent
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.beginPath(); ctx.arc(11*s, 7*s, 4*s, 0, Math.PI*2); ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+  return c;
+}
+
+function setToggleIcon(btn, noon) {
+  btn.innerHTML = '';
+  const icon = noon ? drawSunIcon(24) : drawMoonIcon(24);
+  icon.style.cssText = 'width:20px;height:20px;image-rendering:pixelated;';
+  btn.appendChild(icon);
+}
 
 // ─── DAY/NIGHT TOGGLE ───
 function setupDayNight() {
@@ -785,10 +1024,11 @@ function setupDayNight() {
   if (!btn) return;
   btn.addEventListener('click', () => {
     isNoon = !isNoon;
-    btn.textContent = isNoon ? '☀' : '☾';
+    setToggleIcon(btn, isNoon);
   });
   // Start as noon
   isNoon = true; dayNightT = 1;
+  setToggleIcon(btn, true);
   applyDayNight(1); // apply noon immediately
 }
 function applyDayNight(t) {
@@ -817,13 +1057,25 @@ function applyDayNight(t) {
   godRayMeshes.forEach(r => { r.material.opacity = THREE.MathUtils.lerp(0.015, 0.003, t); });
   // Lantern lights + chamber glow: bright at night, dim at noon
   lanternMeshes.forEach(l => {
-    const parent = l.parent;
-    if (!parent) return;
-    const light = parent.children.find(c => c.isLight);
-    if (light) light.intensity = THREE.MathUtils.lerp(1.5, 0.05, t);
-    // Chamber color: warm at night, muted at noon. Always opaque.
-    l.material.color.setHex(t < 0.5 ? 0xC67652 : 0x7A6A5A);
-    l.material.opacity = 1.0;
+    if (l.isLanternV2) {
+      // V2: separate shell + window group
+      const parent = l.shell.parent;
+      if (!parent) return;
+      const light = parent.children.find(c => c.isLight);
+      if (light) light.intensity = THREE.MathUtils.lerp(1.5, 0.05, t);
+      // Windows: warm glow at night, dark matte at noon
+      l.windows.children.forEach(w => {
+        w.material.color.setHex(t < 0.5 ? 0xC67652 : 0x4A4540);
+      });
+    } else {
+      // Legacy fallback
+      const parent = l.parent;
+      if (!parent) return;
+      const light = parent.children.find(c => c.isLight);
+      if (light) light.intensity = THREE.MathUtils.lerp(1.5, 0.05, t);
+      l.material.color.setHex(t < 0.5 ? 0xC67652 : 0x7A6A5A);
+      l.material.opacity = 1.0;
+    }
   });
 }
 
@@ -957,11 +1209,122 @@ function updateWater(dt, time) {
 function updateAnimations(time) {
   // Lantern warm flicker — slow and subtle
   lanternMeshes.forEach((l, i) => {
-    const parent = l.parent;
+    const parent = l.isLanternV2 ? l.shell.parent : l.parent;
     if (!parent) return;
     const light = parent.children.find(c => c.isLight);
     if (light) light.intensity = 0.6 + Math.sin(time * 1.5 + i * 2.3) * 0.2 + Math.sin(time * 3.7 + i) * 0.1;
   });
+
+  // Vegetation sway — subtle wind
+  swayMeshes.forEach(m => {
+    const ph = m.userData.swayPhase || 0;
+    m.rotation.z = Math.sin(time * 0.8 + ph) * 0.03;
+    m.rotation.x = Math.sin(time * 0.6 + ph + 1.0) * 0.02;
+  });
+
+  // Water sparkle — drift + twinkle
+  sparkleParticles.forEach(({ mesh, pool, count }) => {
+    const pos = mesh.geometry.attributes.position;
+    for (let i = 0; i < count; i++) {
+      let x = pos.getX(i), z = pos.getZ(i);
+      // Slow drift
+      x += Math.sin(time * 0.3 + i * 1.7) * 0.004;
+      z += Math.cos(time * 0.25 + i * 2.1) * 0.004;
+      // Wrap within pool radius
+      const d = Math.hypot(x, z);
+      if (d > pool.r - 0.5) { x *= 0.1; z *= 0.1; }
+      pos.setX(i, x); pos.setZ(i, z);
+    }
+    pos.needsUpdate = true;
+    // Twinkle opacity
+    mesh.material.opacity = 0.3 + Math.sin(time * 2.0) * 0.2;
+  });
 }
+
+// ─── RUNTIME AUDIT ───
+window.auditOnsens = function () {
+  const rows = [];
+  POOL_DEFS.forEach((p, i) => {
+    // Find matching project sign
+    const sign = projectSigns.find(s => {
+      const proj = s.userData.project;
+      if (!proj) return false;
+      // Sign placed near this pool?
+      const d = Math.hypot(s.position.x - p.x, s.position.z - p.z);
+      return d < p.r + 3;
+    });
+    const projName = sign ? sign.userData.project.name : '(none)';
+
+    // Count component types in scene near this pool
+    let waterCount = 0, floorCount = 0, rockCount = 0;
+    let lanternCount = 0, yuzuCount = 0, duckCount = 0, tubCount = 0, benchCount = 0;
+    let waterR = 0, waterY = 0;
+
+    // Water meshes
+    for (const w of waterMeshes) {
+      if (Math.hypot(w.position.x - p.x, w.position.z - p.z) < 1) {
+        waterCount++;
+        waterR = w.geometry.parameters.radius || 0;
+        waterY = w.position.y;
+      }
+    }
+
+    // Floor: dark circle just below water
+    scene.traverse(obj => {
+      if (!obj.isMesh) return;
+      const d = Math.hypot(obj.position.x - p.x, obj.position.z - p.z);
+      if (d > p.r + 2) return;
+      // Floor detection: CircleGeometry, dark, below water
+      if (obj.geometry?.type === 'CircleGeometry' && obj.material?.color) {
+        const c = obj.material.color.getHex();
+        if (c < 0x303030 && obj.position.y < WATER_Y) floorCount++;
+      }
+    });
+
+    // Lanterns
+    for (const l of lanternMeshes) {
+      const lm = l.isLanternV2 ? l.shell : l;
+      const lp = lm.parent?.position;
+      if (lp && Math.hypot(lp.x - p.x, lp.z - p.z) < p.r + 3) lanternCount++;
+    }
+
+    // Yuzu
+    for (const yg of yuzuGroups) {
+      if (Math.hypot(yg.position.x - p.x, yg.position.z - p.z) < 1) {
+        yuzuCount = yg.children.length;
+      }
+    }
+
+    // Ducks
+    if (window.__ducks) {
+      for (const d of window.__ducks) {
+        if (d.pool === p || Math.hypot(d.pool.x - p.x, d.pool.z - p.z) < 1) duckCount++;
+      }
+    }
+
+    // Sign
+    const signCount = sign ? 1 : 0;
+
+    const groundY = getGroundHeight(p.x, p.z);
+
+    rows.push({
+      pool: i,
+      project: projName,
+      water: waterCount > 0 ? '✓' : '✗',
+      floor: floorCount > 0 ? '✓' : '✗',
+      waterR: waterR.toFixed(1),
+      ringInner: (p.r - 0.75).toFixed(1),
+      waterY: waterY.toFixed(2),
+      groundY: groundY.toFixed(2),
+      lantern: lanternCount,
+      yuzu: yuzuCount,
+      duck: duckCount,
+      sign: signCount,
+      status: (waterCount > 0 && floorCount > 0 && lanternCount > 0 && yuzuCount >= 3 && duckCount >= 1 && signCount > 0) ? 'OK' : 'MISSING',
+    });
+  });
+  console.table(rows);
+  return rows;
+};
 
 init();

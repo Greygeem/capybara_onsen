@@ -2,8 +2,14 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Capybara Onsen Village</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>CAPYBARA ONSEN — Interactive Portfolio</title>
+  <meta name="description" content="Explore projects by guiding a capybara through a pixel-art onsen village. Interactive 3D portfolio." />
+  <meta property="og:title" content="CAPYBARA ONSEN — Interactive Portfolio" />
+  <meta property="og:description" content="A lazy capybara guides you through hot spring pools, each hiding a project to discover." />
+  <meta property="og:image" content="/assets/og-image.png" />
+  <meta property="og:type" content="website" />
+  <link rel="icon" href="/assets/favicon.png" type="image/png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet" />
   <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/packages/pretendard/dist/web/static/pretendard-dynamic-subset.css" rel="stylesheet" />
@@ -25,11 +31,13 @@
     <!-- Top nav -->
     <nav id="top-nav">
       <div id="brand">CAPYBARA ONSEN</div>
-      <div id="nav-links">
+      <div id="nav-center">
         <a href="#" class="nav-link active" data-page="explore">EXPLORE</a>
         <a href="#" class="nav-link" data-page="works">WORKS</a>
         <a href="#" class="nav-link" data-page="about">ABOUT</a>
-        <button id="day-night-toggle" title="Toggle Day/Night">☀</button>
+      </div>
+      <div id="nav-right">
+        <button id="day-night-toggle" title="Toggle Day/Night"></button>
       </div>
     </nav>
 
@@ -72,11 +80,45 @@
       <span class="hint-text">ENTER to peek</span>
     </div>
 
+    <!-- WORKS overlay -->
+    <div id="works-overlay" class="page-overlay hidden">
+      <div class="overlay-close">&times;</div>
+      <h2 class="overlay-title">WORKS</h2>
+      <div id="works-list"></div>
+    </div>
+
+    <!-- ABOUT overlay -->
+    <div id="about-overlay" class="page-overlay hidden">
+      <div class="overlay-close">&times;</div>
+      <h2 class="overlay-title">ABOUT</h2>
+      <p class="about-text">Hello! I'm a developer who builds things at the intersection of AI, Web3, and playful experiences.</p>
+      <p class="about-text">Each onsen here holds a project — dip in and explore.</p>
+      <p class="about-text" style="margin-top:16px;opacity:0.7">"각 탕에 몸을 담그듯 프로젝트를 둘러보세요."</p>
+      <div class="about-links">
+        <a href="#" target="_blank" class="about-link">GitHub</a>
+        <a href="#" target="_blank" class="about-link">LinkedIn</a>
+        <a href="mailto:hello@example.com" class="about-link">Email</a>
+      </div>
+    </div>
+
+    <!-- Mobile touch controls -->
+    <div id="mobile-controls">
+      <div id="dpad">
+        <button class="dpad-btn" data-dir="w">▲</button>
+        <div class="dpad-row">
+          <button class="dpad-btn" data-dir="a">◄</button>
+          <button class="dpad-btn" data-dir="s">▼</button>
+          <button class="dpad-btn" data-dir="d">►</button>
+        </div>
+      </div>
+      <button id="mobile-jump">JUMP</button>
+    </div>
+
     <!-- FPS counter -->
     <div id="fps-counter">-- FPS</div>
 
     <!-- Build version marker -->
-    <div id="build-version">BUILD v18</div>
+    <div id="build-version">RC1</div>
 
     <!-- Intro removed — start immediately -->
   </div>
