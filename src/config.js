@@ -1,5 +1,5 @@
 // ─── BUILD VERSION (bump this each build) ───
-export const BUILD_VERSION = 'v30';
+export const BUILD_VERSION = 'v31';
 
 // Tunable game parameters — adjust values here, not scattered in code
 
