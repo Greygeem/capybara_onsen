@@ -6,6 +6,15 @@ import { createCharacter } from './character.js';
 import { PROJECTS as PROJECT_DATA } from './projects.js';
 import { addStamp, initStampBoard, hasStamp, getStampCount, getTotalCount } from './stamps.js';
 import { initBuildMarker } from './ui.js';
+import { getGroundHeight, createBackgroundLayers } from './terrain.js';
+import {
+  POOL_DEFS, POOL_DEPTH, WATER_Y,
+  CAMERA_DISTANCE, CAMERA_HEIGHT, CAMERA_FOV, MOUSE_SENSITIVITY, CAMERA_LERP,
+  PROJECT_INTERACT_DIST, PIXEL_SIZE,
+  GROUND_SIZE, GROUND_SUBDIVS, GRASS_REPEAT,
+  SHADOW_MAP_SIZE, SHADOW_RANGE,
+  FOG_NEAR, FOG_FAR, SKY_RADIUS,
+} from './config.js';
 
 // ─── PALETTE (from reference) ───
 const P = {
@@ -34,19 +43,6 @@ function makeToonGradient(steps) {
 }
 const toonGrad = makeToonGradient(3);
 
-const SIGN_WOOD = 0x6B5744; // Wooden sign board base color
-const MOVE_SPEED = 8, JUMP_FORCE = 12, GRAVITY = -30;
-const CAMERA_DISTANCE = 11, CAMERA_HEIGHT = 5.5, MOUSE_SENSITIVITY = 0.003;
-const PROJECT_INTERACT_DIST = 8, PIXEL_SIZE = 1;
-
-// ─── POOL DEFINITIONS (shared between ground & pool creation) ───
-const POOL_DEFS = [
-  { x: 6, z: 0, r: 4.5 }, { x: -8, z: -6, r: 3.5 },
-  { x: -4, z: 10, r: 3 }, { x: 14, z: -20, r: 3 },
-  { x: -2, z: -24, r: 3 }, { x: 2, z: 24, r: 3.5 },
-];
-const POOL_DEPTH = 0.7;
-const WATER_Y = -0.15;
 
 // ─── PROJECTS ───
 const PROJECTS = PROJECT_DATA.map(p => ({ ...p, desc: p.description, color: P.bright }));
@@ -55,7 +51,7 @@ const PROJECTS = PROJECT_DATA.map(p => ({ ...p, desc: p.description, color: P.br
 const keys = {};
 const mouse = { x: 0, y: 0 };
 let cameraAngleX = 0, cameraAngleY = 0.3;
-let nearestProject = null, detailOpen = false, started = true;
+let nearestProject = null, detailOpen = false, overlayOpen = false, started = true;
 let clock, scene, camera, renderer, composer;
 let character = null; // character controller from character.js
 let projectSigns = [], steamParticles = [], waterMeshes = [], lanternMeshes = [];
@@ -83,9 +79,9 @@ function init() {
   clock = new THREE.Clock();
   scene = new THREE.Scene();
   scene.background = new THREE.Color(P.darkest);
-  scene.fog = new THREE.Fog(0x6AAAC8, 45, 100); // Sky-blue tint, pushed far
+  scene.fog = new THREE.Fog(0x8BBDD6, FOG_NEAR, FOG_FAR);
 
-  camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 200);
+  camera = new THREE.PerspectiveCamera(CAMERA_FOV, window.innerWidth / window.innerHeight, 0.1, 200);
   renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('scene'), antialias: false, powerPreference: 'high-performance' });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(1);
@@ -105,6 +101,9 @@ function init() {
       obstacles, poolData, getGroundHeight, WATER_Y, creamColor: P.cream, camera,
     });
     setupEvents(); setupDayNight(); initStampBoard(); initBuildMarker(); animate();
+    // Hide loading overlay
+    const loadingEl = document.getElementById('loading-overlay');
+    if (loadingEl) { loadingEl.classList.add('fade-out'); setTimeout(() => loadingEl.remove(), 700); }
     // Debug
     window.__toggleRays = (v) => godRayMeshes.forEach(r => r.visible = v);
     window.__teleport = (x, z) => { if (character) character.group.position.set(x, 0, z); };
@@ -127,10 +126,10 @@ async function buildScene() {
   const sun = sunLight;
   sun.position.set(20, 35, -15);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(512, 512);
-  sun.shadow.camera.near = 1; sun.shadow.camera.far = 80;
-  sun.shadow.camera.left = -35; sun.shadow.camera.right = 35;
-  sun.shadow.camera.top = 35; sun.shadow.camera.bottom = -35;
+  sun.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+  sun.shadow.camera.near = 1; sun.shadow.camera.far = SHADOW_RANGE * 2;
+  sun.shadow.camera.left = -SHADOW_RANGE; sun.shadow.camera.right = SHADOW_RANGE;
+  sun.shadow.camera.top = SHADOW_RANGE; sun.shadow.camera.bottom = -SHADOW_RANGE;
   scene.add(sun);
 
   createSky();
@@ -142,16 +141,17 @@ async function buildScene() {
   createUndergrowth();
   createOnsenProps();
   createSteamSystem();
+  createBackgroundLayers(scene, toonGrad);
 }
 
 // ─── SKY (barely visible through canopy) ───
 function createSky() {
-  const skyGeo = new THREE.SphereGeometry(85, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.5);
+  const skyGeo = new THREE.SphereGeometry(SKY_RADIUS, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.5);
   // Vertex color gradient: brighter at horizon, darker at zenith
   const colors = new Float32Array(skyGeo.attributes.position.count * 3);
   for (let i = 0; i < skyGeo.attributes.position.count; i++) {
     const y = skyGeo.attributes.position.getY(i);
-    const t = Math.max(0, Math.min(1, (y + 5) / 85)); // 0 at horizon, 1 at top
+    const t = Math.max(0, Math.min(1, (y + 5) / SKY_RADIUS)); // 0 at horizon, 1 at top
     // Horizon: warm teal #5A8A98, Zenith: deep #2A4858
     const r = (0x5A + (0x2A - 0x5A) * t) / 255;
     const g = (0x8A + (0x48 - 0x8A) * t) / 255;
@@ -165,44 +165,13 @@ function createSky() {
   scene.add(skyMesh);
 }
 
-// ─── POOL DEPRESSION HELPER (shared by ground mesh & height query) ───
-function poolDepth(dist, r) {
-  const flatR = Math.max(0, r - 0.5);   // flat bottom radius
-  const edgeR = r + 0.8;                // ramp ends here
-  if (dist >= edgeR) return 0;
-  if (dist <= flatR) return -POOL_DEPTH;
-  const t = (dist - flatR) / (edgeR - flatR);
-  return -POOL_DEPTH * (1 - t * t * t);  // cubic ease-out → steep sides, gentle finish
-}
-
-// ─── GROUND HEIGHT HELPER ───
-function getGroundHeight(wx, wz) {
-  let h = Math.sin(wx * 0.08) * Math.cos(wz * 0.08) * 0.4 + Math.sin(wx * 0.2 + wz * 0.15) * 0.2;
-  for (const p of POOL_DEFS) {
-    const dist = Math.hypot(wx - p.x, wz - p.z);
-    if (dist < p.r + 1.0) {
-      h = Math.min(h, poolDepth(dist, p.r));
-    }
-  }
-  return h;
-}
-
 // ─── GROUND (deep green grass + moss) ───
 function createGround() {
-  const geo = new THREE.PlaneGeometry(120, 120, 100, 100);
+  const geo = new THREE.PlaneGeometry(GROUND_SIZE, GROUND_SIZE, GROUND_SUBDIVS, GROUND_SUBDIVS);
   const pos = geo.attributes.position;
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), y = pos.getY(i);
-    // Base terrain noise
-    let z = Math.sin(x * 0.08) * Math.cos(y * 0.08) * 0.4 + Math.sin(x * 0.2 + y * 0.15) * 0.2;
-    // Depress pool areas (bathtub shape: flat bottom + steep sides)
-    for (const p of POOL_DEFS) {
-      const dist = Math.hypot(x - p.x, y - p.z);
-      if (dist < p.r + 1.0) {
-        z = Math.min(z, poolDepth(dist, p.r));
-      }
-    }
-    pos.setZ(i, z);
+    pos.setZ(i, getGroundHeight(x, y));
   }
   geo.computeVertexNormals();
 
@@ -220,7 +189,7 @@ function createGround() {
   const tex = new THREE.CanvasTexture(tc);
   tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter;
   tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(50, 50); tex.generateMipmaps = false;
+  tex.repeat.set(GRASS_REPEAT, GRASS_REPEAT); tex.generateMipmaps = false;
 
   const ground = new THREE.Mesh(geo, new THREE.MeshToonMaterial({
     map: tex, color: 0x6DBB6D, gradientMap: toonGrad,
@@ -277,7 +246,7 @@ function createVegetation() {
       const col = j % 2 === 0 ? bushLight : bushDark;
       const blob = new THREE.Mesh(bushGeo, new THREE.MeshToonMaterial({ color: col, gradientMap: toonGrad }));
       blob.scale.set(cs, cs * 0.7, cs);
-      blob.position.set(x + (Math.random()-0.5)*baseS*0.6, cs*0.3, z + (Math.random()-0.5)*baseS*0.6);
+      blob.position.set(x + (Math.random()-0.5)*baseS*0.6, getGroundHeight(x, z) + cs*0.3, z + (Math.random()-0.5)*baseS*0.6);
       blob.userData.swayPhase = Math.random() * Math.PI * 2;
       scene.add(blob);
       swayMeshes.push(blob);
@@ -295,7 +264,7 @@ function createVegetation() {
       color: [bushLight, 0x6AA035, 0x4A8A30][Math.floor(Math.random() * 3)], gradientMap: toonGrad,
     }));
     patch.scale.set(s * 1.2, s * 0.3, s * 1.2); // very flat
-    patch.position.set(x, s * 0.05, z);
+    patch.position.set(x, getGroundHeight(x, z) + s * 0.05, z);
     patch.userData.swayPhase = Math.random() * Math.PI * 2;
     scene.add(patch);
     swayMeshes.push(patch);
@@ -317,8 +286,9 @@ function createVegetation() {
       color: [0x6B6560, 0x7A7168, 0x5E5850][Math.floor(Math.random() * 3)], gradientMap: toonGrad,
     }));
     rock.scale.setScalar(s);
-    rock.position.set(x, s * 0.3, z);
+    rock.position.set(x, getGroundHeight(x, z) + s * 0.3, z);
     rock.rotation.set(Math.random(), Math.random() * Math.PI, Math.random() * 0.5);
+    rock.castShadow = true;
     scene.add(rock);
     if (s > 0.8) obstacles.push({ x, z, r: s * 0.5 });
   }
@@ -333,7 +303,7 @@ function createVegetation() {
       color: [bushDark, 0x2A5A2A, P.midDark][Math.floor(Math.random() * 3)], gradientMap: toonGrad,
     }));
     wall.scale.set(s * 1.5, s, s * 1.5);
-    wall.position.set(x, s * 0.4, z);
+    wall.position.set(x, getGroundHeight(x, z) + s * 0.4, z);
     scene.add(wall);
     obstacles.push({ x, z, r: s * 0.8 });
   }
@@ -388,8 +358,9 @@ function createUndergrowth() {
     for (const pool of POOL_DEFS) { if (Math.hypot(rx - pool.x, rz - pool.z) < pool.r + 1) { skip = true; break; } }
     if (!skip) { for (const obs of obstacles) { if (Math.hypot(rx - obs.x, rz - obs.z) < s * 0.6 + obs.r + 0.3) { skip = true; break; } } }
     if (skip) continue;
-    rock.position.set(rx, s * 0.25, rz);
+    rock.position.set(rx, getGroundHeight(rx, rz) + s * 0.25, rz);
     rock.rotation.set(Math.random(), Math.random() * Math.PI, Math.random() * 0.5);
+    rock.castShadow = true;
     scene.add(rock);
     if (s > 0.7) obstacles.push({ x: rx, z: rz, r: s * 0.6 }); // big rock collision
   }
@@ -411,7 +382,7 @@ function createUndergrowth() {
     for (const pool of POOL_DEFS) { if (Math.hypot(bx - pool.x, bz - pool.z) < pool.r + 1) { skip2 = true; break; } }
     if (!skip2) { for (const obs of obstacles) { if (Math.hypot(bx - obs.x, bz - obs.z) < s * 0.4 + obs.r + 0.2) { skip2 = true; break; } } }
     if (skip2) continue;
-    bush.position.set(bx, s * 0.2, bz);
+    bush.position.set(bx, getGroundHeight(bx, bz) + s * 0.2, bz);
     scene.add(bush);
   }
 }
@@ -530,6 +501,38 @@ function createOnsenPools() {
       `[Pool ${i}] r=${p.r}  waterR=${waterR.toFixed(2)}  floorR=${floorR.toFixed(2)}  rockInner≈${rockInnerR.toFixed(2)}  ${ok ? '✓ PASS' : '✗ FAIL'}`,
     );
   });
+}
+
+// ─── TUB FACTORY (unified creation — upright gets water, tilted is dry) ───
+function createTub(upright) {
+  const tub = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.4, 0.5, 8, 1, true),
+    new THREE.MeshToonMaterial({ color: 0x6B5744, gradientMap: toonGrad }));
+  body.position.y = 0.25; tub.add(body);
+  const bottom = new THREE.Mesh(new THREE.CircleGeometry(0.38, 8),
+    new THREE.MeshToonMaterial({ color: 0x5A4835, gradientMap: toonGrad }));
+  bottom.rotation.x = -Math.PI / 2; bottom.position.y = 0.02; tub.add(bottom);
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.37, 0.03, 4, 8),
+    new THREE.MeshToonMaterial({ color: 0x8B7754, gradientMap: toonGrad }));
+  rim.rotation.x = -Math.PI / 2; rim.position.y = 0.5; tub.add(rim);
+
+  if (upright) {
+    const tubWater = new THREE.Mesh(
+      new THREE.CircleGeometry(0.34, 12),
+      new THREE.MeshBasicMaterial({ color: 0x8FD3E8, transparent: true, opacity: 0.8 }),
+    );
+    tubWater.rotation.x = -Math.PI / 2;
+    tubWater.position.y = 0.47;
+    tub.add(tubWater);
+    if (!window.__tubWaters) window.__tubWaters = [];
+    window.__tubWaters.push(tubWater);
+    tub.userData.hasWater = true;
+  } else {
+    tub.rotation.z = 0.15;
+    tub.userData.hasWater = false;
+  }
+  tub.userData.isTub = true;
+  return tub;
 }
 
 // ─── ONSEN VILLAGE PROPS ───
@@ -674,55 +677,34 @@ function createOnsenProps() {
       light.position.y = y - roofH - chamberH / 2; // center of chamber
       g.add(light);
 
-      g.position.set(lx, 0, lz);
+      g.position.set(lx, getGroundHeight(lx, lz), lz);
       g.scale.setScalar(0.65); // scale down to ~1.0x capybara height visually
+      // Enable shadow casting on key parts
+      base.castShadow = true; chamberShell.castShadow = true; roof.castShadow = true;
       scene.add(g);
       obstacles.push({ x: lx, z: lz, r: 0.40 });
     }
 
-    // === Wooden bath tubs (2 per pool) ===
-    for (let i = 0; i < 2; i++) {
-      let a = (pi * 2.1 + i * 3.0 + 1.0) % (Math.PI * 2);
-      const d = p.r + 2.2;
-      let tx, tz, tubPlaced = false;
-      for (let att = 0; att < 8 && !tubPlaced; att++) {
-        tx = p.x + Math.cos(a) * d; tz = p.z + Math.sin(a) * d;
-        if (tryPlace(tx, tz, 0.45)) { tubPlaced = true; break; }
-        a += Math.PI / 4;
-      }
-      if (!tubPlaced) continue;
+    // === Wooden bath tubs (2 per pool) — factory ensures water on upright tubs ===
+    {
+      let wetTubPlaced = false;
+      for (let i = 0; i < 2; i++) {
+        let a = (pi * 2.1 + i * 3.0 + 1.0) % (Math.PI * 2);
+        const td = p.r + 2.2;
+        let tx, tz, tubOk = false;
+        for (let att = 0; att < 8 && !tubOk; att++) {
+          tx = p.x + Math.cos(a) * td; tz = p.z + Math.sin(a) * td;
+          if (tryPlace(tx, tz, 0.45)) { tubOk = true; break; }
+          a += Math.PI / 4;
+        }
+        if (!tubOk) continue;
 
-      const tub = new THREE.Group();
-      // Tub body (cylinder, open top)
-      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.4, 0.5, 8, 1, true),
-        new THREE.MeshToonMaterial({ color: 0x6B5744, gradientMap: toonGrad }));
-      body.position.y = 0.25; tub.add(body);
-      // Bottom
-      const bottom = new THREE.Mesh(new THREE.CircleGeometry(0.38, 8),
-        new THREE.MeshToonMaterial({ color: 0x5A4835, gradientMap: toonGrad }));
-      bottom.rotation.x = -Math.PI / 2; bottom.position.y = 0.02; tub.add(bottom);
-      // Rim (lighter band)
-      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.37, 0.03, 4, 8),
-        new THREE.MeshToonMaterial({ color: 0x8B7754, gradientMap: toonGrad }));
-      rim.rotation.x = -Math.PI / 2; rim.position.y = 0.5; tub.add(rim);
-
-      tub.position.set(tx, 0, tz);
-      // Water inside upright tub
-      if (i === 0) {
-        const tubWater = new THREE.Mesh(
-          new THREE.CircleGeometry(0.34, 12),
-          new THREE.MeshBasicMaterial({ color: 0x8FD3E8, transparent: true, opacity: 0.8 }),
-        );
-        tubWater.rotation.x = -Math.PI / 2;
-        tubWater.position.y = 0.47; // just below rim at 0.5
-        tub.add(tubWater);
-        if (!window.__tubWaters) window.__tubWaters = [];
-        window.__tubWaters.push(tubWater);
+        const tub = createTub(!wetTubPlaced); // upright+water or tilted+dry
+        tub.position.set(tx, getGroundHeight(tx, tz), tz);
+        scene.add(tub);
+        obstacles.push({ x: tx, z: tz, r: 0.45 });
+        if (!wetTubPlaced) wetTubPlaced = true;
       }
-      // Tilt one slightly
-      if (i === 1) tub.rotation.z = 0.15;
-      scene.add(tub);
-      obstacles.push({ x: tx, z: tz, r: 0.45 });
     }
 
     // === Wooden bench (1 per pool) ===
@@ -745,8 +727,9 @@ function createOnsenProps() {
         bench.add(leg);
       });
 
+      seat.castShadow = true;
       if (tryPlace(bx, bz, 0.5)) {
-        bench.position.set(bx, 0, bz);
+        bench.position.set(bx, getGroundHeight(bx, bz), bz);
         bench.rotation.y = a + Math.PI / 2;
         scene.add(bench);
         obstacles.push({ x: bx, z: bz, r: 0.5 });
@@ -863,8 +846,10 @@ function createProjectSign(project, index) {
   const dirLen = Math.sqrt(dirX * dirX + dirZ * dirZ) || 1;
   const gx = nearPool.x + (dirX / dirLen) * (nearPool.r + 1.2);
   const gz = nearPool.z + (dirZ / dirLen) * (nearPool.r + 1.2);
-  group.position.set(gx, 0, gz);
-  group.lookAt(nearPool.x, 0, nearPool.z);
+  post.castShadow = true; board.castShadow = true;
+  const signY = getGroundHeight(gx, gz);
+  group.position.set(gx, signY, gz);
+  group.lookAt(nearPool.x, signY, nearPool.z);
   group.userData = { project };
   scene.add(group); projectSigns.push(group);
   obstacles.push({ x: gx, z: gz, r: 0.3 });
@@ -904,7 +889,7 @@ function setupEvents() {
   document.querySelectorAll('.dpad-btn').forEach(btn => {
     const dir = btn.dataset.dir;
     btn.addEventListener('touchstart', e => { e.preventDefault(); keys[dir] = true; }, { passive: false });
-    btn.addEventListener('touchend', e => { keys[dir] = false; });
+    btn.addEventListener('touchend', e => { e.preventDefault(); keys[dir] = false; }, { passive: false });
   });
   const jumpBtn = document.getElementById('mobile-jump');
   if (jumpBtn) {
@@ -933,9 +918,13 @@ function setupEvents() {
   const cb = document.querySelector('.detail-close');
   if (cb) cb.addEventListener('click', closeProjectDetail);
   window.addEventListener('keydown', e => {
-    if (e.code === 'Escape' && detailOpen) closeProjectDetail();
+    if (e.repeat) return;
+    if (e.code === 'Escape' && (detailOpen || overlayOpen)) {
+      if (detailOpen) closeProjectDetail();
+      if (overlayOpen) { document.querySelectorAll('.page-overlay').forEach(o => o.classList.add('hidden')); overlayOpen = false; document.querySelector('.nav-link[data-page="explore"]').classList.add('active'); }
+    }
     if (e.code === 'KeyC') toggleDebugColliders();
-    if ((e.code === 'Enter' || e.code === 'KeyE') && nearestProject && !detailOpen) showProjectDetail(nearestProject);
+    if ((e.code === 'Enter' || e.code === 'KeyE') && nearestProject && !detailOpen && !overlayOpen) showProjectDetail(nearestProject);
   });
   // Nav tabs: WORKS / ABOUT overlays
   document.querySelectorAll('.nav-link').forEach(link => {
@@ -947,10 +936,13 @@ function setupEvents() {
         const wl = document.getElementById('works-list');
         wl.innerHTML = PROJECTS.map(p => `<div class="works-card"><h3>${p.name}</h3><p>${p.desc}</p><div class="detail-tags">${p.tags.map(t=>`<span class="detail-tag">${t}</span>`).join('')}</div>${p.link && p.link!=='#' ? `<a href="${p.link}" target="_blank" class="detail-link">Visit →</a>` : ''}</div>`).join('');
         document.getElementById('works-overlay').classList.remove('hidden');
+        overlayOpen = true;
       } else if (page === 'about') {
         document.getElementById('about-overlay').classList.remove('hidden');
+        overlayOpen = true;
       } else {
         // "explore" = close overlays
+        overlayOpen = false;
       }
       document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
       link.classList.add('active');
@@ -960,6 +952,7 @@ function setupEvents() {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.page-overlay').forEach(o => o.classList.add('hidden'));
       document.querySelector('.nav-link[data-page="explore"]').classList.add('active');
+      overlayOpen = false;
     });
   });
 }
@@ -1042,7 +1035,7 @@ function applyDayNight(t) {
     const colors = skyMesh.geometry.attributes.color;
     for (let i = 0; i < colors.count; i++) {
       const y = skyMesh.geometry.attributes.position.getY(i);
-      const st = Math.max(0, Math.min(1, (y + 5) / 85));
+      const st = Math.max(0, Math.min(1, (y + 5) / SKY_RADIUS));
       const topR = THREE.MathUtils.lerp(DAY.skyTop[0], NOON.skyTop[0], t) / 255;
       const topG = THREE.MathUtils.lerp(DAY.skyTop[1], NOON.skyTop[1], t) / 255;
       const topB = THREE.MathUtils.lerp(DAY.skyTop[2], NOON.skyTop[2], t) / 255;
@@ -1114,7 +1107,7 @@ let frameCount = 0, fpsTime = 0;
 function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05), time = clock.getElapsedTime();
-  if (started && !detailOpen && character) { character.update(dt, time, keys, cameraAngleX); updateCamera(dt); }
+  if (started && !detailOpen && !overlayOpen && character) { character.update(dt, time, keys, cameraAngleX); updateCamera(dt); }
   // Day/night lerp
   const targetT = isNoon ? 1 : 0;
   if (Math.abs(dayNightT - targetT) > 0.001) { dayNightT += (targetT - dayNightT) * dt * 1.5; applyDayNight(dayNightT); }
@@ -1124,20 +1117,27 @@ function animate() {
   if (fpsTime >= 0.5) { document.getElementById('fps-counter').textContent = `${Math.round(frameCount / fpsTime)} FPS`; frameCount = 0; fpsTime = 0; }
 }
 
+const _camTarget = new THREE.Vector3();
+const _camLookAt = new THREE.Vector3();
 function updateCamera(dt) {
   cameraAngleX += mouse.x * MOUSE_SENSITIVITY * 60 * dt;
   cameraAngleY = THREE.MathUtils.clamp(0.2 + mouse.y * 0.3, 0.05, 0.8);
   if (!character) return;
-  const t = character.position.clone();
-  const target = new THREE.Vector3(
-    t.x + Math.sin(cameraAngleX) * CAMERA_DISTANCE,
-    t.y + CAMERA_HEIGHT + cameraAngleY * 4,
-    t.z + Math.cos(cameraAngleX) * CAMERA_DISTANCE,
+  const cp = character.position;
+  _camTarget.set(
+    cp.x + Math.sin(cameraAngleX) * CAMERA_DISTANCE,
+    cp.y + CAMERA_HEIGHT + cameraAngleY * 4,
+    cp.z + Math.cos(cameraAngleX) * CAMERA_DISTANCE,
   );
-  camera.position.lerp(target, 3.5 * dt); // softer follow (was 6)
-  camera.lookAt(t.x, t.y + 1.5, t.z);
+  // Keep camera above terrain
+  const camGroundY = getGroundHeight(_camTarget.x, _camTarget.z);
+  if (_camTarget.y < camGroundY + 2) _camTarget.y = camGroundY + 2;
+  camera.position.lerp(_camTarget, CAMERA_LERP * dt);
+  _camLookAt.set(cp.x, cp.y + 1.5, cp.z);
+  camera.lookAt(_camLookAt);
 }
 
+const _signScale = new THREE.Vector3();
 function updateProximity() {
   if (!character || detailOpen) return;
   let closest = null, closestDist = PROJECT_INTERACT_DIST;
@@ -1147,7 +1147,8 @@ function updateProximity() {
     // Sign grows when close
     const near = dist < PROJECT_INTERACT_DIST;
     const targetScale = near ? 1.05 : 1.0;
-    sign.scale.lerp(new THREE.Vector3(targetScale, targetScale, targetScale), 0.1);
+    _signScale.set(targetScale, targetScale, targetScale);
+    sign.scale.lerp(_signScale, 0.1);
   });
   nearestProject = closest;
   document.getElementById('proximity-hint').classList.toggle('hidden', !closest);
@@ -1324,6 +1325,27 @@ window.auditOnsens = function () {
     });
   });
   console.table(rows);
+  return rows;
+};
+
+// ─── PROP AUDIT (tubs) ───
+window.auditProps = function () {
+  const rows = [];
+  scene.traverse(obj => {
+    if (!obj.userData?.isTub) return;
+    const tilted = Math.abs(obj.rotation.z) > 0.05;
+    const hasWater = obj.userData.hasWater === true;
+    rows.push({
+      x: obj.position.x.toFixed(1),
+      z: obj.position.z.toFixed(1),
+      tilted: tilted ? 'yes' : 'no',
+      water: hasWater ? '✓' : '✗',
+      correct: (tilted && !hasWater) || (!tilted && hasWater) ? 'OK' : 'BUG',
+    });
+  });
+  console.table(rows);
+  const bugs = rows.filter(r => r.correct === 'BUG');
+  console.log(`[AUDIT] ${rows.length} tubs, ${bugs.length} bugs`);
   return rows;
 };
 

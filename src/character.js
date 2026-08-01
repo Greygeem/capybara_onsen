@@ -40,26 +40,36 @@ export async function createCharacter(scene, config) {
     for (let i = 0; i < d.length; i += 4) {
       d[i+3] = d[i+3] < 200 ? 0 : 255;
     }
-    // Pass 2+3: edge-erode dark outline pixels (2 rounds)
-    for (let round = 0; round < 2; round++) {
-      const copy = new Uint8ClampedArray(d);
-      for (let y = 1; y < h-1; y++) {
-        for (let x = 1; x < w-1; x++) {
-          const idx = (y*w+x)*4;
-          if (copy[idx+3] === 0) continue;
-          const bright = (copy[idx]+copy[idx+1]+copy[idx+2])/3;
-          if (bright > 80) continue; // not dark
-          // Check if adjacent to transparent
-          let touchesAlpha = false;
-          for (const [dy,dx] of [[-1,0],[1,0],[0,-1],[0,1]]) {
-            const ni = ((y+dy)*w+(x+dx))*4;
-            if (copy[ni+3] === 0) { touchesAlpha = true; break; }
+    // Pass 2: single-pass edge-erode dark pixels within 2px of ORIGINAL edge.
+    // Uses frozen copy so erode can't cascade into face/body interior.
+    const origCopy = new Uint8ClampedArray(d);
+    for (let y = 2; y < h - 2; y++) {
+      for (let x = 2; x < w - 2; x++) {
+        const idx = (y * w + x) * 4;
+        if (origCopy[idx + 3] === 0) continue;
+        const bright = (origCopy[idx] + origCopy[idx + 1] + origCopy[idx + 2]) / 3;
+        if (bright > 80) continue; // not dark — skip
+        // Check 2px neighborhood for transparent in ORIGINAL (no cascade)
+        let nearEdge = false;
+        for (let dy = -2; dy <= 2 && !nearEdge; dy++) {
+          for (let dx = -2; dx <= 2 && !nearEdge; dx++) {
+            if (dy === 0 && dx === 0) continue;
+            const ni = ((y + dy) * w + (x + dx)) * 4;
+            if (origCopy[ni + 3] === 0) nearEdge = true;
           }
-          if (touchesAlpha) d[idx+3] = 0; // erase dark edge pixel
         }
+        if (nearEdge) d[idx + 3] = 0;
       }
     }
     ctx.putImageData(id, 0, 0);
+
+    // Diagnostic: count interior holes (opaque body pixels with alpha < 255)
+    const finalData = ctx.getImageData(0, 0, w, h).data;
+    let holes = 0;
+    for (let i = 0; i < finalData.length; i += 4) {
+      if (finalData[i + 3] > 0 && finalData[i + 3] < 255) holes++;
+    }
+    console.log(`[CLEAN] ${w}x${h} — interior alpha<255 holes: ${holes}`);
     return c;
   }
 
@@ -202,7 +212,6 @@ export async function createCharacter(scene, config) {
         const nx = dx / dist, nz = dz / dist;
         group.position.x = obs.x + nx * minDist;
         group.position.z = obs.z + nz * minDist;
-        console.log('[COLLIDE]', obs.x.toFixed(1), obs.z.toFixed(1), 'r=' + obs.r.toFixed(2));
       }
     }
 

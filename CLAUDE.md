@@ -31,12 +31,13 @@
 ```
 src/
   main.js        — 씬 생성, 환경, 이벤트, 애니메이션 루프
+  terrain.js     — 지형 (노이즈, 높이맵, 배경 산/숲 레이어)
   character.js   — 캐릭터 컨트롤러 (이동/충돌/facing/온천/말풍선)
   projects.js    — 프로젝트 데이터 배열
   stamps.js      — 도장판 시스템 (HUD/localStorage/연출)
   ui.js          — BUILD 버전 마커 등 UI 유틸
   palette.js     — 색상 팔레트 참조 (P 객체, 낮/밤 프리셋)
-  config.js      — 튜닝값 참조 (속도, 반경, 카메라, BUILD_VERSION)
+  config.js      — 튜닝값 (속도, 카메라, 지형, 그림자, 배경, BUILD_VERSION)
   style.css      — HUD/UI 스타일
 public/assets/
   capybara.png       — 정면 스프라이트
