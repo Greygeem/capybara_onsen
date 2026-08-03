@@ -23,75 +23,11 @@ function loadPixelTexture(path) {
 export async function createCharacter(scene, config) {
   const { obstacles, poolData, getGroundHeight, WATER_Y, creamColor, camera } = config;
 
-  // ── Textures + canvas cleanup pipeline ──
-  const frontTex = await loadPixelTexture('/assets/capybara.png');
-  const backTex  = await loadPixelTexture('/assets/capybara-back.png');
+  // ── Re-quantized pixel art textures (32×28, palette-snapped, no cleanup needed) ──
+  const frontTex = await loadPixelTexture('/assets/capybara-front-32.png');
+  const backTex  = await loadPixelTexture('/assets/capybara-back-32.png');
 
-  function cleanTexture(tex) {
-    const img = tex.image;
-    const c = document.createElement('canvas');
-    c.width = img.width; c.height = img.height;
-    const ctx = c.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-    const id = ctx.getImageData(0, 0, c.width, c.height);
-    const d = id.data;
-    const w = c.width, h = c.height;
-    // Pass 1: quantize alpha (< 200 → 0, >= 200 → 255)
-    for (let i = 0; i < d.length; i += 4) {
-      d[i+3] = d[i+3] < 200 ? 0 : 255;
-    }
-    // Pass 2: single-pass edge-erode dark pixels within 2px of ORIGINAL edge.
-    // Uses frozen copy so erode can't cascade into face/body interior.
-    const origCopy = new Uint8ClampedArray(d);
-    for (let y = 2; y < h - 2; y++) {
-      for (let x = 2; x < w - 2; x++) {
-        const idx = (y * w + x) * 4;
-        if (origCopy[idx + 3] === 0) continue;
-        const bright = (origCopy[idx] + origCopy[idx + 1] + origCopy[idx + 2]) / 3;
-        if (bright > 80) continue; // not dark — skip
-        // Check 2px neighborhood for transparent in ORIGINAL (no cascade)
-        let nearEdge = false;
-        for (let dy = -2; dy <= 2 && !nearEdge; dy++) {
-          for (let dx = -2; dx <= 2 && !nearEdge; dx++) {
-            if (dy === 0 && dx === 0) continue;
-            const ni = ((y + dy) * w + (x + dx)) * 4;
-            if (origCopy[ni + 3] === 0) nearEdge = true;
-          }
-        }
-        if (nearEdge) d[idx + 3] = 0;
-      }
-    }
-    ctx.putImageData(id, 0, 0);
-
-    // Diagnostic: count interior holes (opaque body pixels with alpha < 255)
-    const finalData = ctx.getImageData(0, 0, w, h).data;
-    let holes = 0;
-    for (let i = 0; i < finalData.length; i += 4) {
-      if (finalData[i + 3] > 0 && finalData[i + 3] < 255) holes++;
-    }
-    console.log(`[CLEAN] ${w}x${h} — interior alpha<255 holes: ${holes}`);
-    return c;
-  }
-
-  // Clean both textures
-  frontTex.image = cleanTexture(frontTex);
-  frontTex.needsUpdate = true;
-  backTex.image = cleanTexture(backTex);
-  backTex.needsUpdate = true;
-
-  // Hardcode eyes on cleaned front
-  {
-    const c = frontTex.image;
-    const ctx = c.getContext('2d');
-    ctx.fillStyle = '#111111';
-    ctx.fillRect(68, 100, 73, 10);
-    ctx.fillRect(212, 100, 52, 10);
-    ctx.fillRect(80, 102, 50, 6);
-    ctx.fillRect(220, 102, 38, 6);
-    frontTex.needsUpdate = true;
-  }
-
-  console.log('[CHARACTER] textures cleaned + eyes hardcoded');
+  console.log('[CHARACTER] re-quantized textures loaded');
   console.log('[CHARACTER] colliders:', obstacles.length);
 
   // ── Sprite ──
@@ -101,7 +37,7 @@ export async function createCharacter(scene, config) {
   });
   const sprite = new THREE.Sprite(mat);
   sprite.renderOrder = 10;
-  const H = 2.8, W = H * (frontTex.image.width / frontTex.image.height || 1.14);
+  const H = 2.8, W = H * (32 / 28);
   sprite.scale.set(W, H, 1);
   sprite.position.y = H / 2 + 0.1;
 
