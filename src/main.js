@@ -829,7 +829,7 @@ function createProjectSign(project, index) {
   for (let gy = 0; gy < 128; gy += 6) ctx.fillRect(0, gy, 256, 1);
   ctx.font = '64px "DungGeunMo", "Press Start 2P", monospace';
   ctx.fillStyle = '#F0EFE2'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(project.name, 128, 64);
+  ctx.fillText(project.shortName || project.name, 128, 64);
   const tex = new THREE.CanvasTexture(canvas);
   tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter; tex.generateMipmaps = false;
   const tp = new THREE.Mesh(new THREE.PlaneGeometry(boardW - 0.1, boardH - 0.1), new THREE.MeshBasicMaterial({ map: tex }));
@@ -934,7 +934,7 @@ function setupEvents() {
       document.querySelectorAll('.page-overlay').forEach(o => o.classList.add('hidden'));
       if (page === 'works') {
         const wl = document.getElementById('works-list');
-        wl.innerHTML = PROJECTS.map(p => `<div class="works-card"><h3>${p.name}</h3><p>${p.desc}</p><div class="detail-tags">${p.tags.map(t=>`<span class="detail-tag">${t}</span>`).join('')}</div>${p.link && p.link!=='#' ? `<a href="${p.link}" target="_blank" class="detail-link">Visit →</a>` : ''}</div>`).join('');
+        wl.innerHTML = PROJECTS.map(p => `<div class="works-card"><h3>${p.name}</h3><p>${p.desc}</p><div class="detail-tags">${p.tags.map(t=>`<span class="detail-tag">${t}</span>`).join('')}</div>${p.link ? `<a href="${p.link}" target="_blank" rel="noopener" class="detail-link">Visit →</a>` : ''}</div>`).join('');
         document.getElementById('works-overlay').classList.remove('hidden');
         overlayOpen = true;
       } else if (page === 'about') {
@@ -972,7 +972,7 @@ function showProjectDetail(project) {
   linkEl.target = '_blank';
   linkEl.rel = 'noopener';
   linkEl.textContent = 'Visit →';
-  linkEl.style.display = (project.link && project.link !== '#') ? 'inline-block' : 'none';
+  linkEl.style.display = project.link ? 'inline-block' : 'none';
   el.classList.remove('hidden');
 }
 function closeProjectDetail() { detailOpen = false; document.getElementById('project-detail').classList.add('hidden'); }
