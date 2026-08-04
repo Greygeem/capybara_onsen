@@ -1,5 +1,5 @@
 // ─── BUILD VERSION (bump this each build) ───
-export const BUILD_VERSION = 'v34';
+export const BUILD_VERSION = 'v35';
 
 // Tunable game parameters — adjust values here, not scattered in code
 
@@ -19,7 +19,7 @@ export const MOUSE_SENSITIVITY = 0.003;
 export const CAMERA_LERP = 3.5;
 
 // Rendering
-export const PIXEL_SIZE = 6;
+export const PIXEL_SIZE = 1;
 
 // Interaction
 export const PROJECT_INTERACT_DIST = 8;
@@ -55,7 +55,7 @@ export const GROUND_SUBDIVS = 100;
 export const GRASS_REPEAT = 66;
 
 // Shadows
-export const SHADOW_MAP_SIZE = 256;
+export const SHADOW_MAP_SIZE = 1024;
 export const SHADOW_RANGE = 45;
 
 // Fog
