@@ -33,16 +33,18 @@ src/
   main.js        — 씬 생성, 환경, 이벤트, 애니메이션 루프
   terrain.js     — 지형 (노이즈, 높이맵, 배경 산/숲 레이어)
   character.js   — 캐릭터 컨트롤러 (이동/충돌/facing/온천/말풍선)
-  projects.js    — 프로젝트 데이터 배열
+  projects.js    — 프로젝트 데이터 배열 (6개 실데이터, shortName 포함)
   stamps.js      — 도장판 시스템 (HUD/localStorage/연출)
   ui.js          — BUILD 버전 마커 등 UI 유틸
-  palette.js     — 색상 팔레트 참조 (P 객체, 낮/밤 프리셋)
+  palette.js     — 색상 팔레트 참조 (P 객체, 낮/밤 프리셋, toonGradient)
   config.js      — 튜닝값 (속도, 카메라, 지형, 그림자, 배경, BUILD_VERSION)
   style.css      — HUD/UI 스타일
 public/assets/
-  capybara.png       — 정면 스프라이트
-  capybara-back.png  — 뒷면 스프라이트
-backups/             — 원본 에셋 백업
+  capybara-front-32.png  — 정면 스프라이트 (32×28 재양자화)
+  capybara-back-32.png   — 뒷면 스프라이트 (32×28 재양자화)
+  favicon.png            — 파비콘
+  og-image.png           — OG 이미지
+backups/                 — 원본 에셋 백업
 ```
 
 ## 기술 스택
@@ -76,6 +78,8 @@ backups/             — 원본 에셋 백업
 ## 프로젝트 추가 방법
 1. `src/projects.js`의 배열에 새 객체 추가:
    ```js
-   { id: 'myproject', name: 'MY PROJECT', description: '설명', tags: ['Tag'], link: '#', position: [x, 0, z] }
+   { id: 'myproject', name: 'MY PROJECT', shortName: 'MY PROJ', description: '설명', tags: ['Tag'], link: 'https://...', position: [x, 0, z] }
    ```
+   - `shortName`: 게이트 현판용 (좁은 간판에 맞게 축약)
+   - `link`: 빈 문자열이면 Visit 버튼 숨김 (죽은 링크 금지)
 2. 저장하면 자동으로 온천 게이트 + 현판 + 콜라이더 + 도장 칸 생성.
