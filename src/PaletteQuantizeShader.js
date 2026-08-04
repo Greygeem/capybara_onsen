@@ -10,7 +10,7 @@ export const PaletteQuantizeShader = {
     tDiffuse: { value: null },
     palette: { value: [] },
     paletteSize: { value: 0 },
-    ditherStrength: { value: 0.06 },
+    ditherStrength: { value: 0.03 },
     outlineStrength: { value: 0.45 },
     pixelSize: { value: 6.0 },
     resolution: { value: new Vector2(1280, 720) },
