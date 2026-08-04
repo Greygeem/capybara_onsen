@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPixelatedPass } from 'three/addons/postprocessing/RenderPixelatedPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { PaletteQuantizeShader } from './PaletteQuantizeShader.js';
+import { GAME_PALETTE, paletteToVec3s } from './palette.js';
 import { createCharacter } from './character.js';
 import { PROJECTS as PROJECT_DATA } from './projects.js';
 import { addStamp, initStampBoard, hasStamp, getStampCount, getTotalCount } from './stamps.js';
@@ -52,6 +55,7 @@ const keys = {};
 const mouse = { x: 0, y: 0 };
 let cameraAngleX = 0, cameraAngleY = 0.3;
 let nearestProject = null, detailOpen = false, overlayOpen = false, started = true;
+let pixelArtMode = true, palettePass = null, pixelPass = null;
 let clock, scene, camera, renderer, composer;
 let character = null; // character controller from character.js
 let projectSigns = [], steamParticles = [], waterMeshes = [], lanternMeshes = [];
@@ -90,10 +94,20 @@ function init() {
   renderer.toneMapping = THREE.NoToneMapping;
 
   composer = new EffectComposer(renderer);
-  const px = new RenderPixelatedPass(PIXEL_SIZE, scene, camera);
-  px.normalEdgeStrength = 0; px.depthEdgeStrength = 0;
-  composer.addPass(px);
+  pixelPass = new RenderPixelatedPass(PIXEL_SIZE, scene, camera);
+  pixelPass.normalEdgeStrength = 0;
+  pixelPass.depthEdgeStrength = 0.6;
+  composer.addPass(pixelPass);
   composer.addPass(new OutputPass());
+
+  // Palette quantization + dithering pass (after OutputPass → sRGB space)
+  palettePass = new ShaderPass(PaletteQuantizeShader);
+  const palVecs = paletteToVec3s(GAME_PALETTE);
+  palettePass.uniforms.palette.value = palVecs;
+  palettePass.uniforms.paletteSize.value = palVecs.length;
+  palettePass.uniforms.pixelSize.value = PIXEL_SIZE;
+  palettePass.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
+  composer.addPass(palettePass);
 
   buildScene().then(async () => {
     // Create character AFTER scene (so obstacles are populated)
@@ -108,11 +122,7 @@ function init() {
     window.__toggleRays = (v) => godRayMeshes.forEach(r => r.visible = v);
     window.__teleport = (x, z) => { if (character) character.group.position.set(x, 0, z); };
     window.__obstacles = obstacles;
-    window.__togglePixelation = () => {
-      const px = composer.passes[0];
-      px.enabled = !px.enabled;
-      console.log('[DEBUG] pixelation', px.enabled ? 'ON' : 'OFF');
-    };
+    window.__togglePixelArt = togglePixelArt;
   });
 }
 
@@ -909,6 +919,7 @@ function setupEvents() {
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight); composer.setSize(window.innerWidth, window.innerHeight);
+    if (palettePass) palettePass.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
   });
   window.addEventListener('click', e => {
     if (!started || detailOpen) return;
@@ -924,6 +935,7 @@ function setupEvents() {
       if (overlayOpen) { document.querySelectorAll('.page-overlay').forEach(o => o.classList.add('hidden')); overlayOpen = false; document.querySelector('.nav-link[data-page="explore"]').classList.add('active'); }
     }
     if (e.code === 'KeyC') toggleDebugColliders();
+    if (e.code === 'KeyP') togglePixelArt();
     if ((e.code === 'Enter' || e.code === 'KeyE') && nearestProject && !detailOpen && !overlayOpen) showProjectDetail(nearestProject);
   });
   // Nav tabs: WORKS / ABOUT overlays
@@ -1070,6 +1082,17 @@ function applyDayNight(t) {
       l.material.opacity = 1.0;
     }
   });
+}
+
+// ─── PIXEL ART TOGGLE ───
+function togglePixelArt() {
+  pixelArtMode = !pixelArtMode;
+  if (pixelPass) {
+    pixelPass.setPixelSize(pixelArtMode ? PIXEL_SIZE : 1);
+    pixelPass.depthEdgeStrength = pixelArtMode ? 0.6 : 0;
+  }
+  if (palettePass) palettePass.enabled = pixelArtMode;
+  console.log('[PIXEL ART]', pixelArtMode ? 'ON' : 'OFF');
 }
 
 // ─── DEBUG COLLIDERS ───
